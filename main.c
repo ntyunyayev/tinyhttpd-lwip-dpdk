@@ -74,8 +74,9 @@ static int tx_idx = 0;
 static struct rte_mbuf *tx_mbufs[MAX_PKT_BURST] = {0};
 
 static char *httpbuf;
-static size_t httpdatalen;
+static size_t max_httpdatalen;
 char *content;
+size_t max_content_len;
 size_t buflen;
 
 static void tx_flush(void)
@@ -127,14 +128,15 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 	int request_length = pbuf_copy_partial(p, buf, 20, 0);
 	if (!strncmp(buf, "GET /", 5))
 	{
-		assert(tcp_sndbuf(tpcb) >= httpdatalen);
+		assert(tcp_sndbuf(tpcb) >= max_httpdatalen);
 		request_length -= 5;
 		char *request = buf + 5;
 		size_t content_len = 0;
+		size_t httpdatalen;
 
 		if (request[0] < '0' || request[0] > '9')
 		{
-			content_len = httpdatalen;
+			content_len = max_httpdatalen;
 		}
 		else
 		{
@@ -147,14 +149,13 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 				request_length -= 1;
 			} while (request[0] >= '0' && request[0] <= '9' && request_length > 0);
 		}
+		assert(max_content_len >= content_len);
+		content[content_len] = '\0';
 		httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
 							   content_len, content);
 		assert(tcp_sndbuf(tpcb) >= httpdatalen);
-		assert(buflen >= httpdatalen);
-		content[content_len] = '\0';
-		printf("http data length: %lu bytes\n", httpdatalen);
-		httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
-								   content_len, content);
+		
+		
 		assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
 		assert(tcp_output(tpcb) == ERR_OK);
 	}
@@ -200,7 +201,7 @@ int main(int argc, char *const *argv)
 {
 	struct netif _netif = {0};
 	ip4_addr_t _addr, _mask, _gate;
-	size_t content_len = 1;
+	max_content_len = 1;
 	int server_port = 10000;
 
 	/* setting up dpdk */
@@ -275,7 +276,7 @@ int main(int argc, char *const *argv)
 				_m = true;
 				break;
 			case 'l':
-				content_len = atol(optarg);
+				max_content_len = atol(optarg);
 				break;
 			case 'p':
 				server_port = atoi(optarg);
@@ -301,11 +302,11 @@ int main(int argc, char *const *argv)
 	{
 		struct tcp_pcb *tpcb, *_tpcb;
 		{
-			buflen = content_len + 256 /* for http hdr */;
+			buflen = max_content_len + 256 /* for http hdr */;
 			assert((httpbuf = (char *)malloc(buflen)) != NULL);
-			assert((content = (char *)malloc(content_len + 1)) != NULL);
-			memset(content, 'A', content_len);
-			content[content_len] = '\0';
+			assert((content = (char *)malloc(max_content_len + 1)) != NULL);
+			memset(content, 'A', max_content_len);
+			content[max_content_len] = '\0';
 			
 		}
 
