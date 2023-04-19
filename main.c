@@ -71,10 +71,12 @@
 
 static struct rte_mempool *pktmbuf_pool = NULL;
 static int tx_idx = 0;
-static struct rte_mbuf *tx_mbufs[MAX_PKT_BURST] = { 0 };
+static struct rte_mbuf *tx_mbufs[MAX_PKT_BURST] = {0};
 
 static char *httpbuf;
 static size_t httpdatalen;
+char *content;
+size_t buflen;
 
 static void tx_flush(void)
 {
@@ -88,11 +90,13 @@ static err_t low_level_output(struct netif *netif __attribute__((unused)), struc
 {
 	char buf[PACKET_BUF_SIZE];
 	void *bufptr, *largebuf = NULL;
-	if (sizeof(buf) < p->tot_len) {
-		largebuf = (char *) malloc(p->tot_len);
+	if (sizeof(buf) < p->tot_len)
+	{
+		largebuf = (char *)malloc(p->tot_len);
 		assert(largebuf);
 		bufptr = largebuf;
-	} else
+	}
+	else
 		bufptr = buf;
 
 	pbuf_copy_partial(p, bufptr, p->tot_len, 0);
@@ -110,18 +114,47 @@ static err_t low_level_output(struct netif *netif __attribute__((unused)), struc
 }
 
 static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb *tpcb,
-			      struct pbuf *p, err_t err)
+							  struct pbuf *p, err_t err)
 {
-	char buf[4] = { 0 };
+	char buf[100] = {0};
 	if (err != ERR_OK)
 		return err;
-	if (!p) {
+	if (!p)
+	{
 		tcp_close(tpcb);
 		return ERR_OK;
 	}
-	pbuf_copy_partial(p, buf, 3, 0);
-	if (!strncmp(buf, "GET", 3)) {
+	int request_length = pbuf_copy_partial(p, buf, 20, 0);
+	if (!strncmp(buf, "GET /", 5))
+	{
 		assert(tcp_sndbuf(tpcb) >= httpdatalen);
+		request_length -= 5;
+		char *request = buf + 5;
+		size_t content_len = 0;
+
+		if (request[0] < '0' || request[0] > '9')
+		{
+			content_len = httpdatalen;
+		}
+		else
+		{
+			content_len = 0;
+			do
+			{
+				int delta = *request++ - '0';
+				content_len *= 10;
+				content_len += delta;
+				request_length -= 1;
+			} while (request[0] >= '0' && request[0] <= '9' && request_length > 0);
+		}
+		httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
+							   content_len, content);
+		assert(tcp_sndbuf(tpcb) >= httpdatalen);
+		assert(buflen >= httpdatalen);
+		content[content_len] = '\0';
+		printf("http data length: %lu bytes\n", httpdatalen);
+		httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
+								   content_len, content);
 		assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
 		assert(tcp_output(tpcb) == ERR_OK);
 	}
@@ -163,9 +196,9 @@ static err_t if_init(struct netif *netif)
 	return ERR_OK;
 }
 
-int main(int argc, char* const* argv)
+int main(int argc, char *const *argv)
 {
-	struct netif _netif = { 0 };
+	struct netif _netif = {0};
 	ip4_addr_t _addr, _mask, _gate;
 	size_t content_len = 1;
 	int server_port = 10000;
@@ -176,20 +209,20 @@ int main(int argc, char* const* argv)
 		uint16_t nb_rxd = NUM_SLOT;
 		uint16_t nb_txd = NUM_SLOT;
 
-		assert((ret = rte_eal_init(argc, (char **) argv)) >= 0);
+		assert((ret = rte_eal_init(argc, (char **)argv)) >= 0);
 		argc -= ret;
 		argv += ret;
 
 		assert(rte_eth_dev_count_avail() == 1);
 
 		assert((pktmbuf_pool = rte_pktmbuf_pool_create("mbuf_pool",
-					RTE_MAX(1 /* nb_ports */ * (nb_rxd + nb_txd + MAX_PKT_BURST + 1 * MEMPOOL_CACHE_SIZE), 8192),
-					MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
-					rte_socket_id())) != NULL);
+													   RTE_MAX(1 /* nb_ports */ * (nb_rxd + nb_txd + MAX_PKT_BURST + 1 * MEMPOOL_CACHE_SIZE), 8192),
+													   MEMPOOL_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE,
+													   rte_socket_id())) != NULL);
 
 		{
 			struct rte_eth_dev_info dev_info;
-			struct rte_eth_conf local_port_conf = { 0 };
+			struct rte_eth_conf local_port_conf = {0};
 
 			assert(rte_eth_dev_info_get(0 /* port id */, &dev_info) >= 0);
 
@@ -208,13 +241,13 @@ int main(int argc, char* const* argv)
 			assert(_mtu <= PACKET_BUF_SIZE);
 
 			assert(rte_eth_rx_queue_setup(0 /* port id */, 0 /* queue */, nb_rxd,
-						rte_eth_dev_socket_id(0 /* port id */),
-						&dev_info.default_rxconf,
-						pktmbuf_pool) >= 0);
+										  rte_eth_dev_socket_id(0 /* port id */),
+										  &dev_info.default_rxconf,
+										  pktmbuf_pool) >= 0);
 
 			assert(rte_eth_tx_queue_setup(0 /* port id */, 0 /* queue */, nb_txd,
-						rte_eth_dev_socket_id(0 /* port id */),
-						&dev_info.default_txconf) >= 0);
+										  rte_eth_dev_socket_id(0 /* port id */),
+										  &dev_info.default_txconf) >= 0);
 
 			assert(rte_eth_dev_start(0 /* port id */) >= 0);
 			assert(rte_eth_promiscuous_enable(0 /* port id */) >= 0);
@@ -225,8 +258,10 @@ int main(int argc, char* const* argv)
 	{
 		int ch;
 		bool _a = false, _g = false, _m = false;
-		while ((ch = getopt(argc, argv, "a:g:l:m:p:")) != -1) {
-			switch (ch) {
+		while ((ch = getopt(argc, argv, "a:g:l:m:p:")) != -1)
+		{
+			switch (ch)
+			{
 			case 'a':
 				inet_pton(AF_INET, optarg, &_addr);
 				_a = true;
@@ -266,16 +301,12 @@ int main(int argc, char* const* argv)
 	{
 		struct tcp_pcb *tpcb, *_tpcb;
 		{
-			size_t buflen = content_len + 256 /* for http hdr */;
-			char *content;
-			assert((httpbuf = (char *) malloc(buflen)) != NULL);
-			assert((content = (char *) malloc(content_len + 1)) != NULL);
+			buflen = content_len + 256 /* for http hdr */;
+			assert((httpbuf = (char *)malloc(buflen)) != NULL);
+			assert((content = (char *)malloc(content_len + 1)) != NULL);
 			memset(content, 'A', content_len);
 			content[content_len] = '\0';
-			httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
-					content_len, content);
-			free(content);
-			printf("http data length: %lu bytes\n", httpdatalen);
+			
 		}
 
 		assert((_tpcb = tcp_new()) != NULL);
@@ -285,10 +316,12 @@ int main(int argc, char* const* argv)
 
 		printf("-- application has started --\n");
 		/* primary loop */
-		while (1) {
+		while (1)
+		{
 			struct rte_mbuf *rx_mbufs[MAX_PKT_BURST];
 			unsigned short i, nb_rx = rte_eth_rx_burst(0 /* port id */, 0 /* queue id */, rx_mbufs, MAX_PKT_BURST);
-			for (i = 0; i < nb_rx; i++) {
+			for (i = 0; i < nb_rx; i++)
+			{
 				{
 					struct pbuf *p;
 					assert((p = pbuf_alloc(PBUF_RAW, rte_pktmbuf_pkt_len(rx_mbufs[i]), PBUF_POOL)) != NULL);
