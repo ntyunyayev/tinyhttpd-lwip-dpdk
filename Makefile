@@ -16,7 +16,7 @@ CFLAGS += -Wextra
 
 LDFLAGS += -lpthread -lm
 
-C_SRCS = main.c
+C_SRCS = main.c utils.c
 
 C_OBJS = $(C_SRCS:.c=.o)
 

@@ -62,12 +62,21 @@
 
 #include <netif/ethernet.h>
 
+#include "utils.h"
+
 #define MAX_PKT_BURST (32)
 #define NUM_SLOT (256)
 
 #define MEMPOOL_CACHE_SIZE (256)
 
 #define PACKET_BUF_SIZE (1518)
+
+#define DEFAULT_PORT 0
+
+#define NB_RX_QUEUES 3
+#define DEFAULT_QUEUE 0
+#define HIGH_PRIORITY_QUEUE 1
+#define LOW_PRIORITY_QUEUE 2
 
 static struct rte_mempool *pktmbuf_pool = NULL;
 static int tx_idx = 0;
@@ -154,8 +163,6 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 		httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
 							   content_len, content);
 		assert(tcp_sndbuf(tpcb) >= httpdatalen);
-		
-		
 		assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
 		assert(tcp_output(tpcb) == ERR_OK);
 	}
@@ -227,7 +234,7 @@ int main(int argc, char *const *argv)
 
 			assert(rte_eth_dev_info_get(0 /* port id */, &dev_info) >= 0);
 
-			assert(rte_eth_dev_configure(0 /* port id */, 1 /* num queues */, 1 /* num queues */, &local_port_conf) >= 0);
+			assert(rte_eth_dev_configure(0 /* port id */, NB_RX_QUEUES /* num queues */, 1 /* num queues */, &local_port_conf) >= 0);
 
 			assert(rte_eth_dev_adjust_nb_rx_tx_desc(0 /* port id */, &nb_rxd, &nb_txd) >= 0);
 
@@ -240,11 +247,13 @@ int main(int argc, char *const *argv)
 
 			assert(rte_eth_dev_get_mtu(0 /* port id */, &_mtu) >= 0);
 			assert(_mtu <= PACKET_BUF_SIZE);
-
-			assert(rte_eth_rx_queue_setup(0 /* port id */, 0 /* queue */, nb_rxd,
-										  rte_eth_dev_socket_id(0 /* port id */),
-										  &dev_info.default_rxconf,
-										  pktmbuf_pool) >= 0);
+			for (int qid = 0; qid < NB_RX_QUEUES; qid++)
+			{
+				assert(rte_eth_rx_queue_setup(0 /* port id */, qid /* queue */, nb_rxd,
+											  rte_eth_dev_socket_id(0 /* port id */),
+											  &dev_info.default_rxconf,
+											  pktmbuf_pool) >= 0);
+			}
 
 			assert(rte_eth_tx_queue_setup(0 /* port id */, 0 /* queue */, nb_txd,
 										  rte_eth_dev_socket_id(0 /* port id */),
@@ -307,7 +316,6 @@ int main(int argc, char *const *argv)
 			assert((content = (char *)malloc(max_content_len + 1)) != NULL);
 			memset(content, 'A', max_content_len);
 			content[max_content_len] = '\0';
-			
 		}
 
 		assert((_tpcb = tcp_new()) != NULL);
@@ -315,12 +323,38 @@ int main(int argc, char *const *argv)
 		assert((tpcb = tcp_listen(_tpcb)) != NULL);
 		tcp_accept(tpcb, accept_handler);
 
-		printf("-- application has started --\n");
+		/* Creating rules for DSCP */
+		{
+			struct rte_flow *flow;
+			struct rte_flow_error error;
+
+			flow = generate_dscp_rule(DEFAULT_PORT, HIGH_PRIORITY_QUEUE, HIGH_PRIORITY_DSCP, &error);
+			if (!flow)
+			{
+				printf("Flow can't be created %d message: %s\n",
+					   error.type,
+					   error.message ? error.message : "(no stated reason)");
+				rte_exit(EXIT_FAILURE, "error in creating flow");
+			}
+			printf("flow1 created\n");
+			flow = generate_dscp_rule(DEFAULT_PORT, LOW_PRIORITY_QUEUE, LOW_PRIORITY_DSCP, &error);
+			if (!flow)
+			{
+				printf("Flow can't be created %d message: %s\n",
+					   error.type,
+					   error.message ? error.message : "(no stated reason)");
+				rte_exit(EXIT_FAILURE, "error in creating flow");
+			}
+			printf("flow2 created\n");
+			printf("-- application has started --\n");
+		}
 		/* primary loop */
 		while (1)
 		{
 			struct rte_mbuf *rx_mbufs[MAX_PKT_BURST];
-			unsigned short i, nb_rx = rte_eth_rx_burst(0 /* port id */, 0 /* queue id */, rx_mbufs, MAX_PKT_BURST);
+			int qid = HIGH_PRIORITY_QUEUE;
+			unsigned short i, nb_rx = rte_eth_rx_burst(DEFAULT_PORT /* port id */, qid /* queue id */, rx_mbufs, MAX_PKT_BURST);
+
 			for (i = 0; i < nb_rx; i++)
 			{
 				{
@@ -331,6 +365,12 @@ int main(int argc, char *const *argv)
 					assert(_netif.input(p, &_netif) == ERR_OK);
 				}
 				rte_pktmbuf_free(rx_mbufs[i]);
+			}
+			int prev_qid = HIGH_PRIORITY_QUEUE;
+			qid = HIGH_PRIORITY_QUEUE;
+			if (nb_rx != MAX_PKT_BURST && prev_qid == HIGH_PRIORITY_QUEUE)
+			{
+				qid = LOW_PRIORITY_QUEUE;
 			}
 			tx_flush();
 			sys_check_timeouts();
