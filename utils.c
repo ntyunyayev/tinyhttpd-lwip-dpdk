@@ -46,8 +46,8 @@ generate_dscp_rule(uint16_t port_id, uint16_t rx_q, uint8_t dscp, struct rte_flo
 
     memset(&ip_spec, 0, sizeof(struct rte_flow_item_ipv4));
     memset(&ip_mask, 0, sizeof(struct rte_flow_item_ipv4));
-    ip_spec.hdr.type_of_service = dscp << 2;
-    ip_mask.hdr.type_of_service = (uint8_t)(0xFF << 2);
+    ip_spec.hdr.type_of_service = (uint8_t)(dscp << 2);
+    ip_mask.hdr.type_of_service = (uint8_t)(0xFC);
     pattern[1].type = RTE_FLOW_ITEM_TYPE_IPV4;
     pattern[1].spec = &ip_spec;
     pattern[1].mask = &ip_mask;

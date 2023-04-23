@@ -352,12 +352,40 @@ int main(int argc, char *const *argv)
 		while (1)
 		{
 			struct rte_mbuf *rx_mbufs[MAX_PKT_BURST];
-			int qid = HIGH_PRIORITY_QUEUE;
-			unsigned short i, nb_rx = rte_eth_rx_burst(DEFAULT_PORT /* port id */, qid /* queue id */, rx_mbufs, MAX_PKT_BURST);
+			/*	First we accept new connections */
+			unsigned short i, nb_rx = rte_eth_rx_burst(DEFAULT_PORT /* port id */, DEFAULT_QUEUE /* queue id */, rx_mbufs, MAX_PKT_BURST);
 
 			for (i = 0; i < nb_rx; i++)
 			{
+				// printf("pkt received\n");
 				{
+					// printf("qid : %d\n", DEFAULT_QUEUE);
+					// struct rte_ether_hdr *eth_hdr = (struct rte_ether_hdr *)(rte_pktmbuf_mtod(rx_mbufs[i], char *));
+					// // printf("eth_hdr->ether_type : %d\n", eth_hdr->ether_type);
+					// if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4))
+					// {
+					// 	// printf("inside if2 \n");
+					// 	struct rte_ipv4_hdr *ip_hdr;
+					// 	ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+					// 	printf("type of service : %d\n", (ip_hdr->type_of_service)>>2);
+					// }
+					struct pbuf *p;
+					assert((p = pbuf_alloc(PBUF_RAW, rte_pktmbuf_pkt_len(rx_mbufs[i]), PBUF_POOL)) != NULL);
+					pbuf_take(p, rte_pktmbuf_mtod(rx_mbufs[i], void *), rte_pktmbuf_pkt_len(rx_mbufs[i]));
+					p->len = p->tot_len = rte_pktmbuf_pkt_len(rx_mbufs[i]);
+					assert(_netif.input(p, &_netif) == ERR_OK);
+				}
+				rte_pktmbuf_free(rx_mbufs[i]);
+			}
+
+			int qid = HIGH_PRIORITY_QUEUE;
+			nb_rx = rte_eth_rx_burst(DEFAULT_PORT /* port id */, qid /* queue id */, rx_mbufs, MAX_PKT_BURST);
+
+			for (i = 0; i < nb_rx; i++)
+			{
+
+				{
+					printf("qid : %d\n", qid);
 					struct pbuf *p;
 					assert((p = pbuf_alloc(PBUF_RAW, rte_pktmbuf_pkt_len(rx_mbufs[i]), PBUF_POOL)) != NULL);
 					pbuf_take(p, rte_pktmbuf_mtod(rx_mbufs[i], void *), rte_pktmbuf_pkt_len(rx_mbufs[i]));
