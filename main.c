@@ -87,6 +87,7 @@ static size_t max_httpdatalen;
 char *content;
 size_t max_content_len;
 size_t buflen;
+static char *big_buf;
 
 static void tx_flush(void)
 {
@@ -108,9 +109,7 @@ static err_t low_level_output(struct netif *netif __attribute__((unused)), struc
 	}
 	else
 		bufptr = buf;
-
 	pbuf_copy_partial(p, bufptr, p->tot_len, 0);
-
 	assert((tx_mbufs[tx_idx] = rte_pktmbuf_alloc(pktmbuf_pool)) != NULL);
 	assert(p->tot_len <= RTE_MBUF_DEFAULT_BUF_SIZE);
 	rte_memcpy(rte_pktmbuf_mtod(tx_mbufs[tx_idx], void *), bufptr, p->tot_len);
@@ -142,7 +141,8 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 		char *request = buf + 5;
 		size_t content_len = 0;
 		size_t httpdatalen;
-
+		//size_t TCP_SEGMENT_SIZE = tcp_sndbuf(tpcb);
+		/* Parsing http request*/
 		if (request[0] < '0' || request[0] > '9')
 		{
 			content_len = max_httpdatalen;
@@ -158,13 +158,35 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 				request_length -= 1;
 			} while (request[0] >= '0' && request[0] <= '9' && request_length > 0);
 		}
-		assert(max_content_len >= content_len);
-		content[content_len] = '\0';
-		httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
-							   content_len, content);
-		assert(tcp_sndbuf(tpcb) >= httpdatalen);
-		assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
-		assert(tcp_output(tpcb) == ERR_OK);
+		/* Case where more than 1 tcp segment is needed */
+		if (content_len <= max_content_len)
+		{
+			httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
+								   content_len, content);
+			assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
+			assert(tcp_output(tpcb) == ERR_OK);
+		}
+		else
+		{
+			httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
+								   max_content_len, big_buf);
+			assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
+			assert(tcp_output(tpcb) == ERR_OK);
+			content_len -= max_content_len;
+			while (content_len > max_content_len)
+			{
+				printf("success\n");
+				printf("max_content_len : %ld\n", max_content_len);
+				assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
+				assert(tcp_output(tpcb) == ERR_OK);
+				content_len -= max_content_len/2;
+			}
+			// printf("content_len : %ld\n",content_len);
+			// big_buf[content_len] = '\0';
+			// assert(tcp_write(tpcb, big_buf, content_len, TCP_WRITE_FLAG_COPY) == ERR_OK);
+			// assert(tcp_output(tpcb) == ERR_OK);
+			
+		}
 	}
 	tcp_recved(tpcb, p->tot_len);
 	pbuf_free(p);
@@ -314,7 +336,9 @@ int main(int argc, char *const *argv)
 			buflen = max_content_len + 256 /* for http hdr */;
 			assert((httpbuf = (char *)malloc(buflen)) != NULL);
 			assert((content = (char *)malloc(max_content_len + 1)) != NULL);
+			assert((big_buf = (char *)malloc(buflen)) != NULL);
 			memset(content, 'A', max_content_len);
+			memset(big_buf, 'A', buflen);
 			content[max_content_len] = '\0';
 		}
 
