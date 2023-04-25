@@ -78,13 +78,21 @@
 #define HIGH_PRIORITY_QUEUE 1
 #define LOW_PRIORITY_QUEUE 2
 
+#define MAX_TCP_PKT_LEN 65535
+#define SIZE_OF_HTTP_HDR 128
+
+ #define min(a,b) \
+   ({ __typeof__ (a) _a = (a); \
+       __typeof__ (b) _b = (b); \
+     _a < _b ? _a : _b; })
+
 static struct rte_mempool *pktmbuf_pool = NULL;
 static int tx_idx = 0;
 static struct rte_mbuf *tx_mbufs[MAX_PKT_BURST] = {0};
 
 static char *httpbuf;
 static size_t max_httpdatalen;
-char *content;
+static char *content;
 size_t max_content_len;
 size_t buflen;
 static char *big_buf;
@@ -158,35 +166,57 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 				request_length -= 1;
 			} while (request[0] >= '0' && request[0] <= '9' && request_length > 0);
 		}
-		/* Case where more than 1 tcp segment is needed */
 		if (content_len <= max_content_len)
 		{
+
+			content[content_len] = '\0';
 			httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
 								   content_len, content);
 			assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
 			assert(tcp_output(tpcb) == ERR_OK);
+			content[content_len] = 'A';
 		}
 		else
 		{
-			httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
-								   max_content_len, big_buf);
+			printf("inside else\n");
+			content[max_content_len] = '\0';
+			httpdatalen = snprintf(httpbuf, content_len, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
+								   max_content_len, content);
 			assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
 			assert(tcp_output(tpcb) == ERR_OK);
 			content_len -= max_content_len;
-			while (content_len > max_content_len)
+			tx_flush();
+			while (content_len > 0)
 			{
-				printf("success\n");
-				printf("max_content_len : %ld\n", max_content_len);
-				assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
+				tx_flush();
+				printf("looping\n");
+				size_t data_to_send = min(tcp_sndbuf(tpcb),content_len);
+				content[data_to_send] = '\0';
+				// while(tcp_sndbuf(tpcb) < max_content_len){
+				// 	printf("tcp_sndbuf(tpcb) : %d\n",tcp_sndbuf(tpcb));
+				// 	printf("max_content_len : %d\n", max_content_len):
+				// 	printf("looping2\n");
+				// }
+				assert(tcp_write(tpcb, content, data_to_send, TCP_WRITE_FLAG_COPY) == ERR_OK);
 				assert(tcp_output(tpcb) == ERR_OK);
-				content_len -= max_content_len/2;
+				content_len -= max_content_len;
 			}
+			content[max_content_len] = 'A';
+			// if (content_len > 0)
+			// {
+			// 	content[content_len] = '\0';
+			// 	// while(tcp_sndbuf(tpcb) < content_len){}
+			// 	assert(tcp_write(tpcb, content, content_len, TCP_WRITE_FLAG_COPY) == ERR_OK);
+			// 	assert(tcp_output(tpcb) == ERR_OK);
+			// 	content[content_len] = 'A';
+			// }
 			// printf("content_len : %ld\n",content_len);
 			// big_buf[content_len] = '\0';
 			// assert(tcp_write(tpcb, big_buf, content_len, TCP_WRITE_FLAG_COPY) == ERR_OK);
 			// assert(tcp_output(tpcb) == ERR_OK);
-			
 		}
+		// printf("tcp length : %d\n",tcp_sndbuf(tpcb));
+		// printf("content_len : %ld\n", content_len);
 	}
 	tcp_recved(tpcb, p->tot_len);
 	pbuf_free(p);
@@ -306,9 +336,6 @@ int main(int argc, char *const *argv)
 				inet_pton(AF_INET, optarg, &_mask);
 				_m = true;
 				break;
-			case 'l':
-				max_content_len = atol(optarg);
-				break;
 			case 'p':
 				server_port = atoi(optarg);
 				break;
@@ -333,13 +360,11 @@ int main(int argc, char *const *argv)
 	{
 		struct tcp_pcb *tpcb, *_tpcb;
 		{
-			buflen = max_content_len + 256 /* for http hdr */;
-			assert((httpbuf = (char *)malloc(buflen)) != NULL);
+			max_content_len = MAX_TCP_PKT_LEN - SIZE_OF_HTTP_HDR;
+			buflen = MAX_TCP_PKT_LEN /* for http hdr */;
+			assert((httpbuf = (char *)malloc(MAX_TCP_PKT_LEN)) != NULL);
 			assert((content = (char *)malloc(max_content_len + 1)) != NULL);
-			assert((big_buf = (char *)malloc(buflen)) != NULL);
-			memset(content, 'A', max_content_len);
-			memset(big_buf, 'A', buflen);
-			content[max_content_len] = '\0';
+			memset(content, 'A', MAX_TCP_PKT_LEN - SIZE_OF_HTTP_HDR);
 		}
 
 		assert((_tpcb = tcp_new()) != NULL);
@@ -373,6 +398,7 @@ int main(int argc, char *const *argv)
 			printf("-- application has started --\n");
 		}
 		/* primary loop */
+		int qid = HIGH_PRIORITY_QUEUE;
 		while (1)
 		{
 			struct rte_mbuf *rx_mbufs[MAX_PKT_BURST];
@@ -384,15 +410,15 @@ int main(int argc, char *const *argv)
 				// printf("pkt received\n");
 				{
 					// printf("qid : %d\n", DEFAULT_QUEUE);
-					// struct rte_ether_hdr *eth_hdr = (struct rte_ether_hdr *)(rte_pktmbuf_mtod(rx_mbufs[i], char *));
-					// // printf("eth_hdr->ether_type : %d\n", eth_hdr->ether_type);
-					// if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4))
-					// {
-					// 	// printf("inside if2 \n");
-					// 	struct rte_ipv4_hdr *ip_hdr;
-					// 	ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
-					// 	printf("type of service : %d\n", (ip_hdr->type_of_service)>>2);
-					// }
+					//  struct rte_ether_hdr *eth_hdr = (struct rte_ether_hdr *)(rte_pktmbuf_mtod(rx_mbufs[i], char *));
+					//  // printf("eth_hdr->ether_type : %d\n", eth_hdr->ether_type);
+					//  if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4))
+					//  {
+					//  	// printf("inside if2 \n");
+					//  	struct rte_ipv4_hdr *ip_hdr;
+					//  	ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
+					//  	printf("type of service : %d\n", (ip_hdr->type_of_service)>>2);
+					//  }
 					struct pbuf *p;
 					assert((p = pbuf_alloc(PBUF_RAW, rte_pktmbuf_pkt_len(rx_mbufs[i]), PBUF_POOL)) != NULL);
 					pbuf_take(p, rte_pktmbuf_mtod(rx_mbufs[i], void *), rte_pktmbuf_pkt_len(rx_mbufs[i]));
@@ -401,15 +427,13 @@ int main(int argc, char *const *argv)
 				}
 				rte_pktmbuf_free(rx_mbufs[i]);
 			}
-
-			int qid = HIGH_PRIORITY_QUEUE;
+			/* We consume high priority traffic first*/
 			nb_rx = rte_eth_rx_burst(DEFAULT_PORT /* port id */, qid /* queue id */, rx_mbufs, MAX_PKT_BURST);
 
 			for (i = 0; i < nb_rx; i++)
 			{
-
 				{
-					printf("qid : %d\n", qid);
+					// printf("qid : %d\n", qid);
 					struct pbuf *p;
 					assert((p = pbuf_alloc(PBUF_RAW, rte_pktmbuf_pkt_len(rx_mbufs[i]), PBUF_POOL)) != NULL);
 					pbuf_take(p, rte_pktmbuf_mtod(rx_mbufs[i], void *), rte_pktmbuf_pkt_len(rx_mbufs[i]));
@@ -418,9 +442,9 @@ int main(int argc, char *const *argv)
 				}
 				rte_pktmbuf_free(rx_mbufs[i]);
 			}
-			int prev_qid = HIGH_PRIORITY_QUEUE;
+			int prev_qid = qid;
 			qid = HIGH_PRIORITY_QUEUE;
-			if (nb_rx != MAX_PKT_BURST && prev_qid == HIGH_PRIORITY_QUEUE)
+			if (nb_rx == 0 && prev_qid == HIGH_PRIORITY_QUEUE)
 			{
 				qid = LOW_PRIORITY_QUEUE;
 			}
