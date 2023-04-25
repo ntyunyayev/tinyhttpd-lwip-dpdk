@@ -165,6 +165,7 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 		assert(tcp_sndbuf(tpcb) >= httpdatalen);
 		assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
 		assert(tcp_output(tpcb) == ERR_OK);
+		content[content_len] = 'A';
 	}
 	tcp_recved(tpcb, p->tot_len);
 	pbuf_free(p);
@@ -349,6 +350,8 @@ int main(int argc, char *const *argv)
 			printf("-- application has started --\n");
 		}
 		/* primary loop */
+
+		int qid = HIGH_PRIORITY_QUEUE;
 		while (1)
 		{
 			struct rte_mbuf *rx_mbufs[MAX_PKT_BURST];
@@ -377,15 +380,13 @@ int main(int argc, char *const *argv)
 				}
 				rte_pktmbuf_free(rx_mbufs[i]);
 			}
-
-			int qid = HIGH_PRIORITY_QUEUE;
+			/* We consume high priority traffic first*/
 			nb_rx = rte_eth_rx_burst(DEFAULT_PORT /* port id */, qid /* queue id */, rx_mbufs, MAX_PKT_BURST);
 
 			for (i = 0; i < nb_rx; i++)
 			{
-
 				{
-					printf("qid : %d\n", qid);
+					// printf("qid : %d\n", qid);
 					struct pbuf *p;
 					assert((p = pbuf_alloc(PBUF_RAW, rte_pktmbuf_pkt_len(rx_mbufs[i]), PBUF_POOL)) != NULL);
 					pbuf_take(p, rte_pktmbuf_mtod(rx_mbufs[i], void *), rte_pktmbuf_pkt_len(rx_mbufs[i]));
@@ -394,9 +395,9 @@ int main(int argc, char *const *argv)
 				}
 				rte_pktmbuf_free(rx_mbufs[i]);
 			}
-			int prev_qid = HIGH_PRIORITY_QUEUE;
+			int prev_qid = qid;
 			qid = HIGH_PRIORITY_QUEUE;
-			if (nb_rx != MAX_PKT_BURST && prev_qid == HIGH_PRIORITY_QUEUE)
+			if (nb_rx == 0 && prev_qid == HIGH_PRIORITY_QUEUE)
 			{
 				qid = LOW_PRIORITY_QUEUE;
 			}
