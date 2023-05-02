@@ -81,8 +81,8 @@
 #define MAX_TCP_PKT_LEN 65535
 #define SIZE_OF_HTTP_HDR 128
 
- #define min(a,b) \
-   ({ __typeof__ (a) _a = (a); \
+#define min(a, b) \
+	({ __typeof__ (a) _a = (a); \
        __typeof__ (b) _b = (b); \
      _a < _b ? _a : _b; })
 
@@ -95,7 +95,6 @@ static size_t max_httpdatalen;
 static char *content;
 size_t max_content_len;
 size_t buflen;
-static char *big_buf;
 
 static void tx_flush(void)
 {
@@ -130,6 +129,9 @@ static err_t low_level_output(struct netif *netif __attribute__((unused)), struc
 	return ERR_OK;
 }
 
+
+
+
 static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb *tpcb,
 							  struct pbuf *p, err_t err)
 {
@@ -149,7 +151,7 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 		char *request = buf + 5;
 		size_t content_len = 0;
 		size_t httpdatalen;
-		//size_t TCP_SEGMENT_SIZE = tcp_sndbuf(tpcb);
+		// size_t TCP_SEGMENT_SIZE = tcp_sndbuf(tpcb);
 		/* Parsing http request*/
 		if (request[0] < '0' || request[0] > '9')
 		{
@@ -185,15 +187,14 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 			assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
 			assert(tcp_output(tpcb) == ERR_OK);
 			content_len -= max_content_len;
-			tx_flush();
+			
 			while (content_len > 0)
 			{
-				tx_flush();
 				printf("looping\n");
-				size_t data_to_send = min(tcp_sndbuf(tpcb),content_len);
+				size_t data_to_send = min(tcp_sndbuf(tpcb), content_len);
 				content[data_to_send] = '\0';
 				// while(tcp_sndbuf(tpcb) < max_content_len){
-				// 	printf("tcp_sndbuf(tpcb) : %d\n",tcp_sndbuf(tpcb));
+				printf("tcp_sndbuf(tpcb) : %d\n", tcp_sndbuf(tpcb));
 				// 	printf("max_content_len : %d\n", max_content_len):
 				// 	printf("looping2\n");
 				// }
