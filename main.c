@@ -44,6 +44,8 @@
 #include <rte_mbuf.h>
 #include <rte_bus_pci.h>
 
+#include <math.h>
+
 /* workaround to avoid conflicts between dpdk and lwip definitions */
 #undef IP_DF
 #undef IP_MF
@@ -75,8 +77,8 @@
 
 #define NB_RX_QUEUES 3
 #define DEFAULT_QUEUE 0
-#define HIGH_PRIORITY_QUEUE 1
-#define LOW_PRIORITY_QUEUE 2
+#define HIGH_PRIORITY_QUEUE 0
+#define LOW_PRIORITY_QUEUE 1
 
 static struct rte_mempool *pktmbuf_pool = NULL;
 static int tx_idx = 0;
@@ -158,14 +160,20 @@ static err_t tcp_recv_handler(void *arg __attribute__((unused)), struct tcp_pcb 
 				request_length -= 1;
 			} while (request[0] >= '0' && request[0] <= '9' && request_length > 0);
 		}
-		assert(max_content_len >= content_len);
-		content[content_len] = '\0';
+
+		size_t actual_content_length = 64;
+		content[actual_content_length] = '\0';
+		
+		for (size_t i = 0; i < sqrt(content_len); i++)
+		{
+			httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
+								   actual_content_length, content);
+		}
 		httpdatalen = snprintf(httpbuf, buflen, "HTTP/1.1 200 OK\r\nContent-Length: %lu\r\nConnection: keep-alive\r\n\r\n%s",
-							   content_len, content);
+							   actual_content_length, content);
 		assert(tcp_sndbuf(tpcb) >= httpdatalen);
 		assert(tcp_write(tpcb, httpbuf, httpdatalen, TCP_WRITE_FLAG_COPY) == ERR_OK);
 		assert(tcp_output(tpcb) == ERR_OK);
-		content[content_len] = 'A';
 	}
 	tcp_recved(tpcb, p->tot_len);
 	pbuf_free(p);
@@ -329,15 +337,6 @@ int main(int argc, char *const *argv)
 			struct rte_flow *flow;
 			struct rte_flow_error error;
 
-			flow = generate_dscp_rule(DEFAULT_PORT, HIGH_PRIORITY_QUEUE, HIGH_PRIORITY_DSCP, &error);
-			if (!flow)
-			{
-				printf("Flow can't be created %d message: %s\n",
-					   error.type,
-					   error.message ? error.message : "(no stated reason)");
-				rte_exit(EXIT_FAILURE, "error in creating flow");
-			}
-			printf("flow1 created\n");
 			flow = generate_dscp_rule(DEFAULT_PORT, LOW_PRIORITY_QUEUE, LOW_PRIORITY_DSCP, &error);
 			if (!flow)
 			{
@@ -354,39 +353,16 @@ int main(int argc, char *const *argv)
 		int qid = HIGH_PRIORITY_QUEUE;
 		while (1)
 		{
+			//printf("hello\n");
 			struct rte_mbuf *rx_mbufs[MAX_PKT_BURST];
-			/*	First we accept new connections */
-			unsigned short i, nb_rx = rte_eth_rx_burst(DEFAULT_PORT /* port id */, DEFAULT_QUEUE /* queue id */, rx_mbufs, MAX_PKT_BURST);
-
-			for (i = 0; i < nb_rx; i++)
-			{
-				// printf("pkt received\n");
-				{
-					// printf("qid : %d\n", DEFAULT_QUEUE);
-					// struct rte_ether_hdr *eth_hdr = (struct rte_ether_hdr *)(rte_pktmbuf_mtod(rx_mbufs[i], char *));
-					// // printf("eth_hdr->ether_type : %d\n", eth_hdr->ether_type);
-					// if (eth_hdr->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4))
-					// {
-					// 	// printf("inside if2 \n");
-					// 	struct rte_ipv4_hdr *ip_hdr;
-					// 	ip_hdr = (struct rte_ipv4_hdr *)(eth_hdr + 1);
-					// 	printf("type of service : %d\n", (ip_hdr->type_of_service)>>2);
-					// }
-					struct pbuf *p;
-					assert((p = pbuf_alloc(PBUF_RAW, rte_pktmbuf_pkt_len(rx_mbufs[i]), PBUF_POOL)) != NULL);
-					pbuf_take(p, rte_pktmbuf_mtod(rx_mbufs[i], void *), rte_pktmbuf_pkt_len(rx_mbufs[i]));
-					p->len = p->tot_len = rte_pktmbuf_pkt_len(rx_mbufs[i]);
-					assert(_netif.input(p, &_netif) == ERR_OK);
-				}
-				rte_pktmbuf_free(rx_mbufs[i]);
-			}
+			
 			/* We consume high priority traffic first*/
-			nb_rx = rte_eth_rx_burst(DEFAULT_PORT /* port id */, qid /* queue id */, rx_mbufs, MAX_PKT_BURST);
-
-			for (i = 0; i < nb_rx; i++)
+			unsigned short nb_rx = rte_eth_rx_burst(DEFAULT_PORT /* port id */, qid /* queue id */, rx_mbufs, MAX_PKT_BURST);
+			
+			for (int i = 0; i < nb_rx; i++)
 			{
 				{
-					// printf("qid : %d\n", qid);
+					//printf("qid : %d\n", qid);
 					struct pbuf *p;
 					assert((p = pbuf_alloc(PBUF_RAW, rte_pktmbuf_pkt_len(rx_mbufs[i]), PBUF_POOL)) != NULL);
 					pbuf_take(p, rte_pktmbuf_mtod(rx_mbufs[i], void *), rte_pktmbuf_pkt_len(rx_mbufs[i]));
